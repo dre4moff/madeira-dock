@@ -128,11 +128,21 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
     uint64_t begin = o->now_ms(), online_at = 0, last_probe = 0, last_list = 0, offline_since = 0;
     bool was_online = false;
     unsigned logged_callbacks = 0, online_callbacks = 0, blips = 0, lost = 0;
+    uint64_t last_auth_report = 0;
     /* MADEIRA_DOCK_LIST_ENTITLEMENT=0: only the single-app query decides, as before. */
     const char *list_setting = getenv("MADEIRA_DOCK_LIST_ENTITLEMENT");
     bool use_list = !(list_setting && !strcmp(list_setting, "0"));
     result = 34;
     for (unsigned tick = 0; tick < 4500 && o->now_ms() - begin < 90000; ++tick) {
+        /* Numeric, bounded checkpoints identify a blocking callback/query.
+         * They never include callback payloads, credentials or account IDs. */
+        uint64_t probe_now = o->now_ms();
+        bool auth_report = !last_auth_report || probe_now - last_auth_report >= 10000;
+        if (auth_report) {
+            last_auth_report = probe_now;
+            o->event("session-auth-wait-ms", (int32_t)(probe_now - begin));
+            o->event("session-auth-step", 1); /* callback pump */
+        }
         for (unsigned batch = 0; batch < 64; ++batch) {
             struct sh_callback cb = {0};
             if (!api->get_callback(pipe, &cb)) break;
@@ -153,8 +163,22 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
             api->free_callback(pipe);
             if (!valid) { result = SH_CALLBACK_INVALID; goto done; }
         }
-        bool signed_in = api->logged_on(user, pipe) &&
-            ((query_fn)v[4])(client_user) && ((query_fn)v[6])(client_user);
+        if (auth_report) o->event("session-auth-step", 2); /* public logged-on query */
+        bool public_online = api->logged_on(user, pipe), private_online = false, connected = false;
+        if (public_online) {
+            if (auth_report) o->event("session-auth-step", 3); /* private logged-on query */
+            private_online = ((query_fn)v[4])(client_user);
+            if (private_online) {
+                if (auth_report) o->event("session-auth-step", 4); /* connection query */
+                connected = ((query_fn)v[6])(client_user);
+            }
+        }
+        bool signed_in = public_online && private_online && connected;
+        if (auth_report) {
+            o->event("session-auth-state", (public_online ? 1 : 0) |
+                     (private_online ? 2 : 0) | (connected ? 4 : 0));
+            o->event("session-auth-step", 5); /* all queries returned */
+        }
         uint64_t now = o->now_ms();
         /* A momentary "not signed in" answer (the client between two of its own
          * ticks, or an in-process answer that did not arrive in time) used to

@@ -1,5 +1,19 @@
 # Madeira Dock — implementation handoff, ml2000 (2026-09-25)
 
+## Local sign-in diagnostics (r14)
+
+The session reports bounded numeric sign-in checkpoints once per ten seconds:
+`session-auth-wait-ms`, `session-auth-step` (1 callback pump, 2 public logged-on,
+3 private logged-on, 4 connection query, 5 queries returned), and
+`session-auth-state` (bits 1/2/4 for those three answers). Skipped queries retain
+zero bits. No credential, account identifier or callback payload is logged.
+Authentication, the 90-second loop bound, ownership checks and launch policy
+are unchanged. The app can report an unreturned guest call after 120 seconds
+and offer its existing Close session control. Production session logic is tested
+with a synthetic clock/client; device recovery is not claimed. See the parent
+Madeira `docs/R14_STEAM_AUTH.md` for poll-slot reuse and build evidence.
+
+
 ## A manager that answers counts as started (2026-09-29)
 
 Device logs of Madeira's one-time-install batch on the upstream tree

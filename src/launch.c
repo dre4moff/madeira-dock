@@ -230,7 +230,11 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
     o->event("launch-client-discovery-published", 1);
     SetConsoleCtrlHandler(on_control, TRUE);
     uint64_t gameid = appid;
-    uint64_t call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, 0, 0, "");
+    /* A per-game choice, exported by the app after madeira.cfg. Keep Valve's
+     * default launch option and supply only the requested user argument. */
+    const char *user_args = wide_flag(L"MADEIRA_STEAM_HOST_DIRECTX11", L'1') ? "-dx11" : "";
+    o->event("launch-directx11", user_args[0] != 0);
+    uint64_t call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, 0, 0, user_args);
     o->event("launch-request-submitted", call != 0);
     if (!call) { result = 43; goto done; }
     uint64_t begin = o->now_ms(), stopped_at = 0;
@@ -356,7 +360,7 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
         }
         if (retry_at && !seen_running && o->now_ms() >= retry_at) {
             retry_at = 0;
-            call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, 0, 0, "");
+            call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, 0, 0, user_args);
             ++retries;
             if (retries <= 3 || retries % 60 == 0) o->event("launch-update-retry", (int32_t)retries);
             if (!call) { result = 43; goto done; }
