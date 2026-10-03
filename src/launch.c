@@ -88,6 +88,25 @@ static bool wide_flag(const wchar_t *name, wchar_t expected)
     return GetEnvironmentVariableW(name, value, 4) == 1 && value[0] == expected;
 }
 
+/* User arguments belong to LaunchApp, not the Dock host command line. Keep
+ * the complete UTF-8 value intact on the initial call and the configuration
+ * retry. Old app builds without the field retain their DX11 flag behavior. */
+static bool read_user_args(char *buffer, int capacity)
+{
+    wchar_t value[4096];
+    DWORD length = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_LAUNCH_ARGUMENTS", value, 4096);
+    if (!length)
+    {
+        const char *fallback = wide_flag(L"MADEIRA_STEAM_HOST_DIRECTX11", L'1') ? "-dx11" : "";
+        if ((int)strlen(fallback) >= capacity) return false;
+        strcpy(buffer, fallback);
+        return true;
+    }
+    if (length >= 4096 || !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+            value, -1, buffer, capacity, NULL, NULL)) return false;
+    return true;
+}
+
 /* Returns 0 once every started job reported success, otherwise 49 (or 12
  * for a malformed callback). Only numeric results are reported: no paths.
  */
@@ -232,8 +251,14 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
     uint64_t gameid = appid;
     /* A per-game choice, exported by the app after madeira.cfg. Keep Valve's
      * default launch option and supply only the requested user argument. */
-    const char *user_args = wide_flag(L"MADEIRA_STEAM_HOST_DIRECTX11", L'1') ? "-dx11" : "";
-    o->event("launch-directx11", user_args[0] != 0);
+    char user_args[4096];
+    if (!read_user_args(user_args, sizeof(user_args)))
+    {
+        o->event("launch-arguments-invalid", 1);
+        goto done;
+    }
+    o->event("launch-directx11", wide_flag(L"MADEIRA_STEAM_HOST_DIRECTX11", L'1'));
+    o->event("launch-custom-arguments-bytes", (int32_t)strlen(user_args));
     uint64_t call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, 0, 0, user_args);
     o->event("launch-request-submitted", call != 0);
     if (!call) { result = 43; goto done; }
