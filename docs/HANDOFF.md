@@ -1,6 +1,43 @@
 # Madeira Dock — implementation handoff, ml2000 (2026-09-25)
 
-## Per-game custom launch arguments (r23)
+## Fork r32 integration (2026-10-06)
+
+All original changes through `72558e4` are merged, including offline logon and
+the original launch-entry key. The fork retains bounded custom arguments and
+authentication progress checkpoints. Initial and retry launches carry both
+the selected key and arguments. `tools/check.sh` and the parent host contracts
+pass; a stripped binary and notices are staged. No real account or game was
+used. Current-tree privacy passes. Full-history findings are existing public
+contributor metadata and build-path examples, with no new sensitive data.
+
+## Original launch entry keys (2026-10-05)
+
+LaunchApp uses the validated `MADEIRA_STEAM_HOST_LAUNCH_OPTION` for its initial
+request and all retries. It carries the original `config.launch` key, not a
+filtered array offset. An absent variable keeps 0 for older launchers; invalid
+input fails closed with result 45. A bounded, decoded error-22 detail explicitly
+identifying a missing requested entry stops the configuration wait. Reports
+contain only numeric launch-option fields; the detail itself is never logged.
+
+Madeira resolves its installed Windows/default entry before native logoff,
+excludes DLC-only entries and refetches legacy caches without original keys.
+Both app and host must be rebuilt. Authentication, ownership and original game
+DRM remain unchanged.
+
+The same C source passed all four ASan/UBSan suites on Linux and macOS, and x64
+and i386 builds with warnings as errors. The app's Swift ASan regressions also
+passed. A Debug IPA containing this host and the companion Madeira changes was
+installed on an M2 iPad with iPadOS 27; the tester confirms that the previously
+failing game starts. This establishes startup, not extended gameplay coverage.
+
+## Fork integration r32 (2026-10-06)
+
+The fork merges every official change at 72558e4. LaunchApp now receives both
+the selected original launch-entry key and the fork user arguments on every
+attempt. Offline sign-in and fallback keep Valve client entitlement checks;
+the fork numeric auth checkpoints remain available.
+
+### Per-game custom launch arguments (r23)
 
 The parent app publishes the selected game's complete command line in
 `MADEIRA_STEAM_HOST_LAUNCH_ARGUMENTS`, after global config is applied. Dock
