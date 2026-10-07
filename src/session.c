@@ -409,7 +409,7 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
      * give Valve's client (a count, no App IDs) and whether the requested one
      * is among them. 0 means the licence list never arrived or was never
      * processed; a count without the app means it arrived without this game. */
-    if (result == 34 && was_online) {
+    if (result == 34 && was_online && !local) {
         uint32_t *apps = calloc(65536, sizeof(uint32_t));
         if (apps) {
             int32_t count = ((subscriptions_fn)v[182])(client_user, apps, 65536, true);
