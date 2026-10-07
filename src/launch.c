@@ -131,6 +131,7 @@ int sh_launch_local(const struct sh_api *api, const struct sh_observer *o,
     HKEY active = NULL, machine = NULL;
     struct saved_value values[3] = {0};
     PROCESS_INFORMATION process = {0};
+    HANDLE job = NULL;
     STARTUPINFOW startup = {0}; startup.cb = sizeof(startup);
     int result = 42;
     bool handler = false;
@@ -145,11 +146,22 @@ int sh_launch_local(const struct sh_api *api, const struct sh_observer *o,
         !publish(&values[1], (DWORD)steamid) || !publish(&values[2], GetCurrentProcessId())) goto done;
     o->event("launch-client-discovery-published", 1);
     handler = SetConsoleCtrlHandler(on_control, TRUE);
-    if (!CreateProcessW(program, command, NULL, NULL, FALSE, 0, NULL, directory, &startup, &process)) {
+    job = CreateJobObjectW(NULL, NULL);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        result = 54; goto done;
+    }
+    if (!CreateProcessW(program, command, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, directory, &startup, &process)) {
         o->event("launch-local-error", (int32_t)GetLastError());
         result = 54; goto done;
     }
-    CloseHandle(process.hThread);
+    /* Assign before the first instruction so launchers cannot escape the
+     * session by spawning a child and exiting. Steam's host is outside the job. */
+    if (!AssignProcessToJobObject(job, process.hProcess) || ResumeThread(process.hThread) == (DWORD)-1) {
+        o->event("launch-local-error", (int32_t)GetLastError());
+        result = 54; goto done;
+    }
     o->event("launch-local-started", 1);
     o->event("launch-game-running", 1);
     result = 44;
@@ -161,15 +173,18 @@ int sh_launch_local(const struct sh_api *api, const struct sh_observer *o,
             api->free_callback(pipe);
             if (!valid) { result = SH_CALLBACK_INVALID; goto done; }
         }
-        DWORD wait = WaitForSingleObject(process.hProcess, 50);
-        if (wait == WAIT_OBJECT_0) {
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting = {0};
+        if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), NULL)) {
+            result = 54; break;
+        }
+        if (!accounting.ActiveProcesses) {
             DWORD exit_code = 0;
             if (GetExitCodeProcess(process.hProcess, &exit_code))
                 o->event("launch-local-exit", (int32_t)exit_code);
             o->event("launch-game-ended", 1);
             result = 0; break;
         }
-        if (wait == WAIT_FAILED) { result = 54; break; }
+        o->sleep_ms(50);
     }
 done:
     if (process.hProcess) {
@@ -177,6 +192,8 @@ done:
             TerminateProcess(process.hProcess, 1);
         CloseHandle(process.hProcess);
     }
+    if (process.hThread) CloseHandle(process.hThread);
+    if (job) CloseHandle(job);
     if (handler) SetConsoleCtrlHandler(on_control, FALSE);
     bool restored = true;
     if (values[0].changed) {
