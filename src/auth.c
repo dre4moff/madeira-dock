@@ -25,12 +25,15 @@ bool dock_auth_parse(const unsigned char *bytes, size_t size, struct dock_auth *
 {
     if (!out) return false;
     dock_auth_clear(out, sizeof(*out));
-    if (!bytes || size < 24 || size > DOCK_AUTH_MAX || memcmp(bytes, "MDOCK001", 8)) return false;
+    if (!bytes || size < 24 || size > DOCK_AUTH_MAX) return false;
+    bool client_only = !memcmp(bytes, "MDOCK002", 8);
+    if (!client_only && memcmp(bytes, "MDOCK001", 8)) return false;
     uint64_t id = little(bytes + 8, 8);
     uint32_t app = (uint32_t)little(bytes + 16, 4);
     size_t name_size = (size_t)little(bytes + 20, 2), token_size = (size_t)little(bytes + 22, 2);
     if ((id >> 56) != 1 || ((id >> 52) & 15) != 1 ||
-        ((id >> 32) & 0xfffff) != 1 || !(uint32_t)id || !app || app == UINT32_MAX ||
+        ((id >> 32) & 0xfffff) != 1 || !(uint32_t)id ||
+        (client_only ? app != 0 : (!app || app == UINT32_MAX)) ||
         !name_size || name_size > 64 || !token_size || token_size > 8192 ||
         size != 24 + name_size + token_size) return false;
     for (size_t i = 24; i < 24 + name_size; ++i)

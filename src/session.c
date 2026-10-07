@@ -168,6 +168,7 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
     const char *name = getenv("MADEIRA_STEAM_HOST_ACCOUNT");
     const char *id_text = getenv("MADEIRA_STEAM_HOST_STEAMID");
     const char *app_text = getenv("MADEIRA_STEAM_HOST_APPID");
+    bool local = enabled("MADEIRA_DOCK_LOCAL");
     char *end = NULL;
     uint64_t id = id_text ? strtoull(id_text, &end, 10) : 0;
     wchar_t handoff[32768];
@@ -193,7 +194,8 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
     }
     end = NULL;
     unsigned long app = app_text ? strtoul(app_text, &end, 10) : 0;
-    if (!app || app == UINT32_MAX || !end || *end) {
+    if (!app_text || !*app_text || !end || *end ||
+        (local ? (app != 0 || !native_auth) : (!app || app == UINT32_MAX))) {
         o->event("session-app-input-invalid", 1);
         goto done;
     }
@@ -217,6 +219,8 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
     /* MADEIRA_DOCK_LIST_ENTITLEMENT=0: only the single-app query decides, as before. */
     const char *list_setting = getenv("MADEIRA_DOCK_LIST_ENTITLEMENT");
     bool use_list = !(list_setting && !strcmp(list_setting, "0"));
+    if (local) o->event("session-local-mode", 1);
+    if (local && enabled("MADEIRA_DOCK_OFFLINE")) { result = 53; goto done; }
     /* MADEIRA_DOCK_OFFLINE=1: the launcher found no network. Valve's client is
      * asked for an offline logon straight away instead of waiting out a
      * connection that cannot happen. */
@@ -271,7 +275,7 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
          * reported a failed connection, 20 s have passed and it never signed in.
          * If Valve's client says the account may log on offline, do that instead
          * of waiting out the 90 s. A client that says no keeps waiting as before. */
-        if (offline_abi && !was_online && connect_failures && o->now_ms() - begin >= 20000) {
+        if (!local && offline_abi && !was_online && connect_failures && o->now_ms() - begin >= 20000) {
             int32_t can = ((can_offline_fn)v[214])(client_user);
             o->event("session-offline-fallback", can);
             if (can == 1) {
@@ -327,6 +331,16 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
          * A true subscription is required; timeout never permits launch.
          */
         if (was_online && !offline_since && now - online_at >= 5000) {
+            /* A local executable has no client-managed install or launch entry.
+             * Host the authenticated client as desktop Steam would; the game's
+             * original Steamworks API and backend still decide its access.
+             * No App ID, licence, ticket or success response is supplied here. */
+            if (local) {
+                o->event("session-local-client-ready", 1);
+                result = enabled("MADEIRA_STEAM_HOST_LAUNCH")
+                    ? sh_launch_local(api, o, pipe, user, id) : 53;
+                break;
+            }
             bool entitled = ((subscribed_fn)v[181])(client_user, (uint32_t)app);
             if (!entitled && now - last_probe >= 10000) {
                 /* Not yet, every 10 s: how many apps the account's licences give the

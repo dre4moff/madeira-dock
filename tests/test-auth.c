@@ -77,6 +77,16 @@ int main(void)
     put(bytes + 22, 8193, 2); assert(!dock_auth_parse(bytes, sizeof(bytes), &auth));
     const unsigned char *cleared = (const unsigned char *)&auth;
     for (size_t i = 0; i < sizeof(auth); ++i) assert(cleared[i] == 0);
+    /* Client-only transfers cannot be used as an app-bound licence launch. */
+    put(bytes + 22, 8192, 2);
+    memcpy(bytes, "MDOCK002", 8);
+    put(bytes + 16, 0, 4);
+    assert(dock_auth_parse(bytes, DOCK_AUTH_MAX, &auth) && auth.app_id == 0);
+    put(bytes + 16, 42, 4);
+    assert(!dock_auth_parse(bytes, DOCK_AUTH_MAX, &auth));
+    memcpy(bytes, "MDOCK001", 8);
+    put(bytes + 16, 0, 4);
+    assert(!dock_auth_parse(bytes, DOCK_AUTH_MAX, &auth));
     /* Arbitrary malformed envelopes must stay bounded under ASan/UBSan. */
     uint32_t seed = 1234;
     for (unsigned n = 0; n < 2000; ++n) {

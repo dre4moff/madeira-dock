@@ -107,6 +107,93 @@ static bool read_user_args(char *buffer, int capacity)
     return true;
 }
 
+/* Local developer executables use the real online client in the background.
+ * Their own API reads their own App ID (e.g. steam_appid.txt). This path never
+ * calls LaunchApp, installs content, supplies an App ID or changes game code. */
+int sh_launch_local(const struct sh_api *api, const struct sh_observer *o,
+                    int32_t pipe, int32_t user, uint64_t steamid)
+{
+    (void)user;
+    wchar_t program[1024], directory[1024], args[4096], command[6144];
+    DWORD p = GetEnvironmentVariableW(L"MADEIRA_DOCK_LOCAL_PROGRAM", program, 1024);
+    DWORD d = GetEnvironmentVariableW(L"MADEIRA_DOCK_LOCAL_DIRECTORY", directory, 1024);
+    DWORD a = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_LAUNCH_ARGUMENTS", args, 4096);
+    if (!a) args[0] = 0;
+    if (!p || p >= 1024 || !d || d >= 1024 || a >= 4096 ||
+        _wcsnicmp(program, L"C:\\", 3) || _wcsnicmp(directory, L"C:\\", 3) ||
+        wcschr(program, L'"') || wcschr(directory, L'"') ||
+        p < 4 || _wcsicmp(program + p - 4, L".exe")) return 53;
+    DWORD file = GetFileAttributesW(program), folder = GetFileAttributesW(directory);
+    if (file == INVALID_FILE_ATTRIBUTES || (file & FILE_ATTRIBUTE_DIRECTORY) ||
+        folder == INVALID_FILE_ATTRIBUTES || !(folder & FILE_ATTRIBUTE_DIRECTORY)) return 53;
+    int length = _snwprintf(command, 6144, L"\"%ls\" %ls", program, args);
+    if (length < 0 || length >= 6144) return 53;
+    HKEY active = NULL, machine = NULL;
+    struct saved_value values[3] = {0};
+    PROCESS_INFORMATION process = {0};
+    STARTUPINFOW startup = {0}; startup.cb = sizeof(startup);
+    int result = 42;
+    bool handler = false;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam\\ActiveProcess", 0,
+                     KEY_QUERY_VALUE | KEY_SET_VALUE, &active) != ERROR_SUCCESS ||
+        RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Valve\\Steam", 0,
+                     KEY_QUERY_VALUE | KEY_SET_VALUE | KEY_WOW64_32KEY, &machine) != ERROR_SUCCESS) goto done;
+    values[0] = (struct saved_value){.key=active, .name=L"pid"};
+    values[1] = (struct saved_value){.key=active, .name=L"ActiveUser"};
+    values[2] = (struct saved_value){.key=machine, .name=L"SteamPID"};
+    if (!publish(&values[0], GetCurrentProcessId()) ||
+        !publish(&values[1], (DWORD)steamid) || !publish(&values[2], GetCurrentProcessId())) goto done;
+    o->event("launch-client-discovery-published", 1);
+    handler = SetConsoleCtrlHandler(on_control, TRUE);
+    if (!CreateProcessW(program, command, NULL, NULL, FALSE, 0, NULL, directory, &startup, &process)) {
+        o->event("launch-local-error", (int32_t)GetLastError());
+        result = 54; goto done;
+    }
+    CloseHandle(process.hThread);
+    o->event("launch-local-started", 1);
+    o->event("launch-game-running", 1);
+    result = 44;
+    while (!InterlockedCompareExchange(&interrupted, 0, 0)) {
+        for (unsigned batch = 0; batch < 64; ++batch) {
+            struct sh_callback cb = {0};
+            if (!api->get_callback(pipe, &cb)) break;
+            bool valid = cb.id > 0 && cb.size >= 0 && (!cb.size || cb.data);
+            api->free_callback(pipe);
+            if (!valid) { result = SH_CALLBACK_INVALID; goto done; }
+        }
+        DWORD wait = WaitForSingleObject(process.hProcess, 50);
+        if (wait == WAIT_OBJECT_0) {
+            DWORD exit_code = 0;
+            if (GetExitCodeProcess(process.hProcess, &exit_code))
+                o->event("launch-local-exit", (int32_t)exit_code);
+            o->event("launch-game-ended", 1);
+            result = 0; break;
+        }
+        if (wait == WAIT_FAILED) { result = 54; break; }
+    }
+done:
+    if (process.hProcess) {
+        if (WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT)
+            TerminateProcess(process.hProcess, 1);
+        CloseHandle(process.hProcess);
+    }
+    if (handler) SetConsoleCtrlHandler(on_control, FALSE);
+    bool restored = true;
+    if (values[0].changed) {
+        DWORD current = 0, bytes = sizeof(current), type = 0;
+        if (RegQueryValueExW(active, L"pid", NULL, &type, (BYTE *)&current, &bytes) != ERROR_SUCCESS ||
+            type != REG_DWORD || current != GetCurrentProcessId()) restored = false;
+    }
+    if (restored)
+        for (int i = 2; i >= 0; --i) if (!restore(&values[i])) restored = false;
+    o->event("launch-discovery-restored", restored);
+    if (machine) RegCloseKey(machine);
+    if (active) RegCloseKey(active);
+    if (!restored) result = 47;
+    o->event("launch-host-result", result);
+    return result;
+}
+
 /* Returns 0 once every started job reported success, otherwise 49 (or 12
  * for a malformed callback). Only numeric results are reported: no paths.
  */
@@ -434,6 +521,12 @@ done:
     return result;
 }
 #else
+int sh_launch_local(const struct sh_api *api, const struct sh_observer *o,
+                    int32_t pipe, int32_t user, uint64_t steamid)
+{
+    (void)api; (void)o; (void)pipe; (void)user; (void)steamid;
+    return 40;
+}
 int sh_launch(HMODULE module, void *engine, void *client_user,
               const struct sh_api *api, const struct sh_observer *o,
               int32_t pipe, int32_t user, uint64_t steamid, uint32_t appid,
