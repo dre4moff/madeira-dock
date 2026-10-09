@@ -24,6 +24,11 @@ no.
 Madeira passes the selected original launch-entry key and bounded per-game launch
 arguments to the client. The same selection and arguments are used on retries.
 
+During a manually added program's lifetime, Dock continues pumping callbacks and
+checks the client's public logged-on state every 30 seconds. Reports contain
+bounded numeric state changes and connection error codes, without callback
+payloads or account data. The game's own services determine multiplayer access.
+
 ## Why it exists
 
 Steam's desktop interface (the client window and its Chromium web helper) needs more memory than

@@ -113,7 +113,6 @@ static bool read_user_args(char *buffer, int capacity)
 int sh_launch_local(const struct sh_api *api, const struct sh_observer *o,
                     int32_t pipe, int32_t user, uint64_t steamid)
 {
-    (void)user;
     wchar_t program[1024], directory[1024], args[4096], command[6144];
     DWORD p = GetEnvironmentVariableW(L"MADEIRA_DOCK_LOCAL_PROGRAM", program, 1024);
     DWORD d = GetEnvironmentVariableW(L"MADEIRA_DOCK_LOCAL_DIRECTORY", directory, 1024);
@@ -165,13 +164,34 @@ int sh_launch_local(const struct sh_api *api, const struct sh_observer *o,
     o->event("launch-local-started", 1);
     o->event("launch-game-running", 1);
     result = 44;
+    uint64_t last_logon_check = 0;
+    int previous_logon = -1;
+    unsigned logon_checks = 0, logon_reports = 0, connection_reports = 0;
     while (!InterlockedCompareExchange(&interrupted, 0, 0)) {
         for (unsigned batch = 0; batch < 64; ++batch) {
             struct sh_callback cb = {0};
             if (!api->get_callback(pipe, &cb)) break;
             bool valid = cb.id > 0 && cb.size >= 0 && (!cb.size || cb.data);
+            if (valid && (cb.id == 102 || cb.id == 103) && cb.size >= 4 && connection_reports < 16) {
+                int32_t error;
+                memcpy(&error, cb.data, sizeof(error));
+                o->event("launch-client-connection-callback", cb.id);
+                o->event("launch-client-connection-result", error);
+                ++connection_reports;
+            }
             api->free_callback(pipe);
             if (!valid) { result = SH_CALLBACK_INVALID; goto done; }
+        }
+        uint64_t now = o->now_ms();
+        if (!logon_checks || now - last_logon_check >= 30000) {
+            int logged_on = api->logged_on(user, pipe) ? 1 : 0;
+            ++logon_checks;
+            last_logon_check = now;
+            if (logged_on != previous_logon && logon_reports < 16) {
+                o->event("launch-client-logged-on", logged_on);
+                ++logon_reports;
+            }
+            previous_logon = logged_on;
         }
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting = {0};
         if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), NULL)) {
@@ -186,6 +206,7 @@ int sh_launch_local(const struct sh_api *api, const struct sh_observer *o,
         }
         o->sleep_ms(50);
     }
+    o->event("launch-client-logon-checks", (int32_t)logon_checks);
 done:
     if (process.hProcess) {
         if (WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT)

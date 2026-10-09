@@ -1,5 +1,19 @@
 # Madeira Dock — implementation handoff, ml2000 (2026-09-25)
 
+## Fork r37 local-client connection diagnostics (2026-10-09)
+
+The local-program wait loop now checks `Steam_BLoggedOn` every 30 seconds and
+reports `launch-client-logged-on` initially and on changes (at most 16 reports).
+Connection callbacks 102/103 report only their numeric type/result (at most 16).
+The final logon-check count distinguishes a monitored session from an early
+exit. Callbacks are freed as before. Disconnection reporting does not terminate
+the local program or supply any Steamworks identity, ticket or ownership result.
+
+The parent ASan/UBSan local lifecycle fixture exercises loss/recovery without
+terminating the program, query cadence and the callback-report bound. The
+parent r37 update also repairs Darwin UDP TOS ancillary conversion in Wine.
+Actual game matchmaking and phone acceptance still require a device test.
+
 ## Fork r32 integration (2026-10-06)
 
 All original changes through `72558e4` are merged, including offline logon and
